@@ -23,12 +23,14 @@ $SUDO apt-get install -y \
     curl \
     git \
     jq \
-    nodejs \
-    npm \
     openssl \
     python3 \
     unzip \
     xz-utils
+
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    $SUDO apt-get install -y nodejs npm
+fi
 
 $SUDO npm install --global \
     clean-css-cli \
@@ -39,6 +41,7 @@ $SUDO npm install --global \
 if ! command -v arduino-cli >/dev/null 2>&1; then
     TMP_DIR="$(mktemp -d)"
     trap 'rm -rf "$TMP_DIR"' EXIT
+    mkdir -p "$TMP_DIR/bin"
 
     curl -fsSL \
         https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
@@ -89,7 +92,7 @@ if [ "$INSTALLED_ESP8266_VERSION" != "$ESP8266_CORE_VERSION" ]; then
     "${ARDUINO_CLI[@]}" core install "esp8266:esp8266@$ESP8266_CORE_VERSION"
 fi
 
-"${ARDUINO_CLI[@]}" lib install "Adafruit GFX Library" "Adafruit ST7735 and ST7789 Library"
+"${ARDUINO_CLI[@]}" lib install "Adafruit GFX Library" "Adafruit ST7735 and ST7789 Library" "U8g2"
 
 echo
 "${ARDUINO_CLI[@]}" version

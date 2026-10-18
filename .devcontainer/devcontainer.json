@@ -1,0 +1,8 @@
+{
+  "name": "ESP32 Linux build environment",
+  "dockerComposeFile": "../compose.yaml",
+  "service": "firmware",
+  "workspaceFolder": "/workspace",
+  "overrideCommand": true,
+  "shutdownAction": "stopCompose"
+}
