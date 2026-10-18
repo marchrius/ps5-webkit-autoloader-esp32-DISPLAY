@@ -42,6 +42,9 @@ If an attempt fails, follow the on-screen instruction to reboot and try again. I
 
 ## Requirements
 
+For macOS, Windows, or an isolated Linux build, use the Docker environment
+below instead of installing dependencies on the host.
+
 - Arduino CLI
 - Arduino ESP32 core 2.0.11
 - ~~Arduino ESP8266 core 3.1.2 (required for `make 8266`)~~
@@ -51,6 +54,53 @@ Install the Arduino CLI and required core:
 ```sh
 ./install-deps.sh
 ```
+
+## Docker / Dev Container (Linux, macOS, Windows)
+
+Install Docker with Compose v2 (for example, Docker Desktop with Linux
+containers on Windows). Run these commands from the repository root.
+Initialize the submodules if the repository was not cloned recursively:
+
+```sh
+git submodule update --init --recursive
+docker compose build
+```
+
+The image installs GNU Make, Node.js, the asset minifiers, Arduino CLI 1.2.2,
+the pinned ESP32/ESP8266 cores, and the display libraries using
+`install-deps.sh`. The initial build needs Internet access and several GB
+of disk space. The image supports Linux AMD64 and ARM64 and builds for the
+host architecture, including Apple Silicon, without requiring x86 emulation.
+
+Compile `mklittlefs` for Linux once, including after switching from a native
+host build, then build the display firmware:
+
+```sh
+docker compose run --rm firmware make -C mklittlefs clean all
+docker compose run --rm firmware make s3-lcd
+```
+
+The repository is mounted at `/workspace`, so the output is available on
+the host at `build/lcd/s3/esp32-arduino.s3.merged.bin`. Other commands work
+the same way:
+
+```sh
+docker compose run --rm firmware make
+docker compose run --rm firmware make debug
+docker compose run --rm firmware make clean
+docker compose run --rm firmware bash
+```
+
+In VS Code, install **Dev Containers**, open this repository and choose
+**Dev Containers: Reopen in Container**. In its terminal, run
+`make -C mklittlefs clean all` once, then use the normal Linux commands
+such as `make s3-lcd`. Dependencies are already installed in the image.
+
+Keep shell scripts checked out with LF endings (enforced by `.gitattributes`).
+On Linux, the container runs as root and generated files can be owned by root;
+use `docker compose run --rm firmware chown -R UID:GID build data autoloader.mini`
+with your numeric user and group IDs if needed. USB devices are not mapped;
+flash the generated `.bin` from the host with your preferred flashing tool.
 
 ## Build
 

@@ -1,0 +1,4 @@
+# Only the dependency installer is needed to build the development image.
+**
+!Dockerfile
+!install-deps.sh

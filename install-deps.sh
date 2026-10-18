@@ -23,12 +23,14 @@ $SUDO apt-get install -y \
     curl \
     git \
     jq \
-    nodejs \
-    npm \
     openssl \
     python3 \
     unzip \
     xz-utils
+
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    $SUDO apt-get install -y nodejs npm
+fi
 
 $SUDO npm install --global \
     clean-css-cli \
@@ -39,6 +41,7 @@ $SUDO npm install --global \
 if ! command -v arduino-cli >/dev/null 2>&1; then
     TMP_DIR="$(mktemp -d)"
     trap 'rm -rf "$TMP_DIR"' EXIT
+    mkdir -p "$TMP_DIR/bin"
 
     curl -fsSL \
         https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
