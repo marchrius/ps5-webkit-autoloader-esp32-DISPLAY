@@ -104,6 +104,135 @@ flash the generated `.bin` from the host with your preferred flashing tool.
 
 ## Build
 
+### Configurable Wi-Fi, selective DNS and AP+STA gateway
+
+Gateway profiles keep the board's own Wi-Fi network active while connecting
+it to a home router at 2.4 GHz. Clients connected to the board can use its
+DNS blocker and reach the Internet through IPv4 NAT once the home connection
+and gateway are ready. Devices on the home network can also use the board
+as a selective DNS server without routing their traffic through it.
+
+These profiles use **Arduino ESP32 3.3.2**, installed separately by
+`install-gateway-deps.sh`; the standard profiles retain core 2.0.11. The
+separate installation avoids changing the legacy toolchain. For native Linux:
+
+```sh
+./install-gateway-deps.sh
+make c3-oled-dns
+```
+
+Rebuild the Docker image to include the gateway toolchain, then build:
+
+```sh
+docker compose build
+docker compose run --rm firmware make c3-oled-dns
+```
+
+| Target | Board/profile | Output directory |
+| --- | --- | --- |
+| `c3-oled-dns` | ESP32-C3 with 0.42-inch OLED | `build/selective-dns/c3` |
+| `c3-dns` | ESP32-C3 without OLED | `build/gateway/c3` |
+| `pico-dns` | ESP32/PICO, 4 MB flash | `build/gateway/pico` |
+| `pico-8m-dns` | ESP32/PICO, 8 MB flash | `build/gateway/pico-8m` |
+| `s2-dns` | ESP32-S2 | `build/gateway/s2` |
+| `s3-dns` | ESP32-S3 without LCD | `build/gateway/s3` |
+| `s3-lcd-dns` | ESP32-S3 Pocket-Dongle LCD | `build/gateway-lcd/s3` |
+
+`make all-dns` builds the standard ESP32 gateway profiles. ESP8266 retains
+its existing AP-only firmware. Availability of a build target does not imply
+that every physical board and display revision has been hardware-tested.
+Gateway profiles keep USB serial diagnostics enabled on chips with native USB.
+
+For the C3 OLED, first installation uses
+`build/selective-dns/c3/esp32-arduino.c3.merged.bin` at offset `0x0`.
+On first boot, with no saved home Wi-Fi configuration:
+
+1. Connect a phone or computer to **PS5 Master Key**, password **12345678**.
+2. Open **http://192.168.4.1/wifi**; the captive portal may open automatically.
+3. Enter the home Wi-Fi SSID and password. The network must support 2.4 GHz.
+4. The board saves the credentials in NVS and restarts. Its own AP remains
+   available while it connects to the router.
+5. Connect the PS5 using either of the following modes.
+
+| PS5 connection | Network settings |
+| --- | --- |
+| Board's Wi-Fi network | Keep IP, gateway and DNS automatic. DHCP supplies the board's AP address as DNS; IPv4 Internet traffic uses its NAT gateway when ready. |
+| Home Wi-Fi network | Keep IP and gateway automatic. Set **both DNS fields** to the board's home-network IP shown as L: on the OLED, in `/settings`, or in the serial log. A router DHCP reservation keeps this IP stable. |
+
+The board reuses saved credentials at every boot without reopening the Wi-Fi
+form. If the router is absent or the password is wrong, it keeps retrying,
+preserving both the credentials and its own AP. Internet access through the
+board resumes once the upstream connection and NAT are ready. If the home
+subnet overlaps the board's default `192.168.4.0/24` network, the board selects
+a different private AP subnet. Reconnect clients to the board so they receive
+the new DHCP settings; use its current AP IP to open the configuration pages.
+
+Open **`http://<board-IP>/settings`** to change the board's own Wi-Fi name and
+password without recompiling. This page works through either network address.
+Authenticate as **admin**, using the **current password of the board's AP**.
+An empty password field preserves the existing password; a new password must
+contain 8–63 printable ASCII characters, and the name 1–32. Saving restarts
+the board. The C3 OLED and S3 LCD keep the AP name and password visible, scrolling long
+values, including while connected to the home router. The IP row alternates
+between AP and home-network addresses (L: on OLED, LAN: on LCD) when online; `/settings` also lists
+both addresses for boards without a display. The home router's Wi-Fi password
+is never displayed or printed to serial.
+
+To erase **only the home Wi-Fi credentials**, hold **BOOT for 5 seconds while
+the board is already running**. Release BOOT when it restarts and reopen
+`/wifi` through the AP. Its custom AP name and password are preserved, as are
+LittleFS and unrelated NVS namespaces. BOOT+RESET enters the ROM flasher and
+does not perform this configuration reset. BOOT is GPIO9 on C3 and GPIO0 on
+the other supported ESP32 profiles.
+
+| DNS names | Action |
+| --- | --- |
+| `manuals.playstation.net`, `ena.net.playstation.net` | Resolve to the board's AP IP for AP clients, or its home-network IP for home-network clients; AAAA returns no data |
+| `ps5.update.playstation.net` and **all its subdomains** | Block with NXDOMAIN for all query types |
+| `update.playstation.net`, `update.net.playstation.net` | Block with NXDOMAIN |
+| All other names, including `www.msftconnecttest.com` | Forward unchanged to the DNS server supplied by the router |
+
+The update zone includes regional metadata hosts such as
+`fus01.ps5.update.playstation.net` / `fuk01.ps5.update.playstation.net`, and
+download hosts such as `dus01.ps5.update.playstation.net` and
+[`pc.ps5.update.playstation.net`, linked by Sony's update page](https://www.playstation.com/it-it/support/hardware/ps5/system-software/).
+The regional host pattern is also recorded in the researcher's
+[PS5 network analysis](https://archive.codeblue.jp/2024/files/cb24_Defeating_PlayStation_5_Network_Encryption_by_Aapo_Oksman.pdf).
+Shared PlayStation game CDN domains are not blanket-blocked.
+
+The policy blocks DNS names; it is not a general-purpose firewall. It does
+not filter arbitrary connections, hardcoded destination IPs or encrypted DNS.
+Blocking applies while the console uses this DNS and cannot prevent an
+update already downloaded, cached elsewhere or supplied on USB/disc. Disable
+automatic system update downloads and installation on the PS5 as well.
+NAT forwards IPv4 traffic; these profiles do not provide an IPv6 gateway.
+DNS forwarding supports UDP and TCP, up to eight pending UDP queries, one
+TCP transaction and 4 KiB messages. Slow upstream queries expire after four
+seconds without blocking local DNS responses or BOOT handling.
+
+The 4 MB gateway layout reserves **1.5 MB** for the application and places
+LittleFS at **`0x190000`**, with size **`0x270000`**. Legacy 4 MB profiles
+have a 1 MB application partition and a different filesystem offset. When
+moving from a legacy profile to a gateway profile, flash the gateway's
+bootloader, partition table, application **and filesystem** together; use
+the target's full merged image. An application-only flash across these layouts
+can overwrite the old filesystem and will not install the new partition table.
+
+For later updates with the **same partition layout**, flashing only the
+application at `0x10000` retains saved NVS settings. For example, use
+`build/selective-dns/c3/esp32-arduino.ino.bin` for C3 OLED. Flashing a full
+merged image at `0x0` replaces the NVS region and removes saved configuration.
+The 8 MB PICO profile uses its own `partitions-8m.csv` layout; always match
+firmware and filesystem images to the selected target.
+
+Gateway profiles use the nonblocking proxy in `selective-dns.h`; standard
+AP-only profiles retain the patched Arduino DNSServer below. Run DNS protocol,
+Wi-Fi persistence, settings validation and BOOT reset tests with:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
 ### ESP32-C3 SuperMini with 0.42-inch OLED
 
 The standard `make c3` firmware does not drive a display. For the common

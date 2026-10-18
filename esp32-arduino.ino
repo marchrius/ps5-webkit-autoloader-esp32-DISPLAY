@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#ifndef SELECTIVE_DNS
 #include <DNSServer.h>
+#endif
 #include <WebServer.h>
 #include <LittleFS.h>
 #include "esp_wifi.h"
@@ -9,6 +11,30 @@
 #include "esp_arduino_version.h"
 #include "esp_idf_version.h"
 #include "server_certs.h"
+
+#ifdef SELECTIVE_DNS
+#include "selective-dns.h"
+#include "network-config.h"
+#include "gateway-routing.h"
+static NetworkConfig network;
+static GatewayRouting gateway;
+static const char *oledIpLabel = "AP:";
+#endif
+
+#ifdef SELECTIVE_DNS
+static String displayWindow(const char *text, size_t width)
+{
+    size_t length = strlen(text);
+    if (length <= width) return String(text);
+    size_t start = (millis() / 500) % (length + 4);
+    String visible;
+    for (size_t i = 0; i < width; ++i) {
+        size_t pos = (start + i) % (length + 4);
+        visible += pos < length ? text[pos] : ' ';
+    }
+    return visible;
+}
+#endif
 
 #ifdef OLED_C3
 #if !CONFIG_IDF_TARGET_ESP32C3
@@ -20,6 +46,7 @@
 // 01Space / SuperMini 0.42-inch OLED: SSD1306, 72x40, I2C 0x3C.
 static U8G2_SSD1306_72X40_ER_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE, 6, 5);
 static bool oledReady = false;
+
 
 static void oledInit()
 {
@@ -42,14 +69,32 @@ static void oledShowInfo(const char *ssid, const String &ip,
 {
     if (!oledReady) return;
     oled.clearBuffer();
+#ifdef SELECTIVE_DNS
+    oled.drawStr(0, 6, "Wi-Fi scheda:");
+    oled.drawStr(0, 14, displayWindow(ssid, 18).c_str());
+#else
     oled.drawStr(0, 6, "WiFi:");
     oled.drawStr(0, 14, ssid);
+#endif
     oled.setCursor(0, 22);
+#ifdef SELECTIVE_DNS
+    oled.print(oledIpLabel);
+#else
     oled.print("IP:");
+#endif
     oled.print(ip);
     oled.setCursor(0, 30);
-    oled.print("Key:");
-    oled.print(pass);
+    if (pass[0]) {
+#ifdef SELECTIVE_DNS
+        oled.print("AP:");
+        oled.print(displayWindow(pass, 15));
+#else
+        oled.print("Key:");
+        oled.print(pass);
+#endif
+    } else {
+        oled.print("BOOT 5s = reset");
+    }
     oled.drawStr(0, 38, status);
     oled.sendBuffer();
 }
@@ -144,8 +189,13 @@ static void lcdShowInfo(const char *title, const String &ip,
     lcd.setCursor(x < 0 ? 0 : x, 3);
     lcd.print(title);
     lcdLine(22, "IP:   ", ip);
+#ifdef SELECTIVE_DNS
+    lcdLine(40, "WiFi: ", displayWindow(ssid, 20));
+    lcdLine(58, "Pass: ", displayWindow(pass, 20));
+#else
     lcdLine(40, "WiFi: ", String(ssid));
     lcdLine(58, "Pass: ", String(pass));
+#endif
 }
 #endif
 
@@ -196,7 +246,14 @@ static void logTlsMemory(const char *stage)
 
 static void httpsSessionCreated(esp_https_server_user_cb_arg_t *event)
 {
+#if ESP_IDF_VERSION_MAJOR >= 5
+    if (event->user_cb_state != HTTPD_SSL_USER_CB_SESS_CREATE) return;
+    int fd = -1;
+    esp_tls_get_conn_sockfd(event->tls, &fd);
+    Serial.printf("[TLS] handshake OK: fd=%d\n", fd);
+#else
     Serial.printf("[TLS] handshake OK: fd=%d\n", event->tls->sockfd);
+#endif
     logTlsMemory("after handshake");
 }
 
@@ -280,7 +337,7 @@ httpd_handle_t httpsServer = NULL;
 static const char *AP_TITLE = "PS5 Master Key";
 static const char *AP_SSID = AP_TITLE;
 static const char *AP_PASSWORD = "12345678";
-static const char *PORTAL_REDIRECT_URL = "http://192.168.4.1/";
+static char PORTAL_REDIRECT_URL[48] = "http://192.168.4.1/";
 
 static const char *PAYLOAD_MIRROR_PREFIX = "/ps5-payloads-mirror/";
 static const char *PAYLOAD_LOCAL_PREFIX = "/pldmrr/";
@@ -297,7 +354,61 @@ bool portalDnsAllowed(const String &domain)
            domain == "www.msftconnecttest.com";
 }
 
+#ifdef SELECTIVE_DNS
+SelectiveDnsServer dnsServer;
+static uint32_t dnsLocalIp = 0, dnsUpstreamIp = 0, dnsApIp = 0;
+static bool networkFilesystemMounted = false;
+static bool networkDnsReady = false;
+static bool gatewayWasReady = false;
+
+static void updateNetworkServices()
+{
+    uint32_t local = network.ip(), upstream = network.dns(), ap = network.apIp();
+    if (!local) local = ap;
+    gateway.poll(network.connected(), network.apIp());
+    if (gateway.ready() != gatewayWasReady) {
+        gatewayWasReady = gateway.ready();
+        Serial.printf("[ROUTER] NAPT %s\n", gatewayWasReady ? "READY" : "OFFLINE");
+    }
+    if (local != dnsLocalIp || upstream != dnsUpstreamIp || ap != dnsApIp) {
+        dnsLocalIp = local; dnsUpstreamIp = upstream; dnsApIp = ap;
+        dnsServer.stop(); networkDnsReady = false;
+        if (local) {
+            snprintf(PORTAL_REDIRECT_URL, sizeof(PORTAL_REDIRECT_URL), "http://%s/",
+                     IPAddress(local).toString().c_str());
+            networkDnsReady = dnsServer.begin(local, upstream, network.configuring(), 53, 53,
+                                              ap, uint32_t(network.apSubnet()));
+            Serial.printf("[DNS] %s IP=%s upstream=%s\n", networkDnsReady ? "Ready" : "FAILED",
+                          network.ip().toString().c_str(), network.dns().toString().c_str());
+        }
+#ifdef LCD_DONGLE
+        lcdShowInfo(AP_TITLE, network.apIp().toString(), network.setupSsid(), network.displayKey());
+#endif
+    }
+#ifdef LCD_DONGLE
+    bool lcdShowLan = network.connected() && (millis() / 5000) % 2;
+    lcd.fillRect(0, 22, 160, 44, ST77XX_BLACK);
+    lcdLine(22, lcdShowLan ? "LAN:  " : "AP:   ",
+            (lcdShowLan ? network.ip() : network.apIp()).toString());
+    lcdLine(40, "WiFi: ", displayWindow(network.setupSsid(), 20));
+    lcdLine(58, "Pass: ", displayWindow(network.displayKey(), 20));
+#endif
+#ifdef OLED_C3
+    String status = network.status();
+    if (!network.configuring() && network.connected()) {
+        if (!networkFilesystemMounted) status = "LittleFS ERROR";
+        else if (!networkDnsReady) status = "DNS ERROR";
+        else status = gateway.ready() ? "GATEWAY READY" : "NAT ERROR";
+    }
+    bool showLan = network.connected() && (millis() / 5000) % 2;
+    oledIpLabel = showLan ? "L:" : "AP:";
+    oledShowInfo(network.setupSsid(), (showLan ? network.ip() : network.apIp()).toString(),
+                 network.displayKey(), status.c_str());
+#endif
+}
+#else
 DNSServer dnsServer;
+#endif
 WebServer webServer(80);
 
 static const char *NO_CACHE_VALUE =
@@ -712,8 +823,13 @@ bool setupHttpsServer()
     config.transport_mode = HTTPD_SSL_TRANSPORT_SECURE;
     config.port_secure = 443;
 
+#if ESP_IDF_VERSION_MAJOR >= 5
+    config.servercert = server_crt;
+    config.servercert_len = server_crt_len;
+#else
     config.cacert_pem = server_crt;
     config.cacert_len = server_crt_len;
+#endif
 
     config.prvtkey_pem = server_key;
     config.prvtkey_len = server_key_len;
@@ -1010,6 +1126,16 @@ static void httpNetworkTestHandler()
 
 void setupWebServer()
 {
+#ifdef SELECTIVE_DNS
+    network.registerRoutes(webServer);
+    if (network.configuring()) {
+        webServer.onNotFound([]() { network.redirectToSetup(webServer); });
+        webServer.begin();
+        Serial.println("HTTP: Wi-Fi setup ready");
+        return;
+    }
+#endif
+
     webServer.on("/generate_204", HTTP_GET, [](){
         logHttpRequest();
         setHttpNoCacheHeaders();
@@ -1115,6 +1241,12 @@ void setup()
         Serial.println("LittleFS mounted");
     }
 
+#ifdef SELECTIVE_DNS
+    networkFilesystemMounted = filesystemMounted;
+    network.begin(AP_SSID, AP_PASSWORD);
+    network.poll();
+    updateNetworkServices();
+#else
     WiFi.persistent(false);
 
     WiFi.mode(WIFI_OFF);
@@ -1191,6 +1323,7 @@ void setup()
         "DNS: %s\n",
         dnsResult ? "OK" : "FAILED"
     );
+#endif
 
     snprintf(manifestVersion, sizeof(manifestVersion), "%08lx%08lx",
              (unsigned long)esp_random(), (unsigned long)esp_random());
@@ -1202,9 +1335,15 @@ void setup()
 
     Serial.println("Starting HTTPS Server");
 
+#ifdef SELECTIVE_DNS
+    if (!network.configuring()) setupHttpsServer();
+#else
     setupHttpsServer();
+#endif
 
-#ifdef OLED_C3
+#ifdef SELECTIVE_DNS
+    updateNetworkServices();
+#elif defined(OLED_C3)
     oledShowInfo(AP_SSID, WiFi.softAPIP().toString(), AP_PASSWORD,
                  filesystemMounted ? "READY" : "LittleFS ERROR");
 #endif
@@ -1214,7 +1353,12 @@ void setup()
 
 void loop()
 {
+#ifdef SELECTIVE_DNS
+    if (network.poll()) updateNetworkServices();
+    dnsServer.poll();
+#else
     dnsServer.processNextRequest();
+#endif
     webServer.handleClient();
 #ifdef LED_PIN
     ledUpdate();

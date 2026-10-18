@@ -33,6 +33,13 @@ RUN sed -i 's/\r$//' /tmp/install-deps.sh \
     && rm /tmp/install-deps.sh \
     && rm -rf /var/lib/apt/lists/* /root/.arduino15/staging/*
 
+# Gateway builds need official SDK libraries compiled with IPv4 forwarding/NAPT.
+COPY install-gateway-deps.sh /tmp/install-gateway-deps.sh
+RUN --mount=type=cache,id=ps5-arduino-downloads,target=/root/.arduino15/staging \
+    sed -i 's/\r$//' /tmp/install-gateway-deps.sh \
+    && bash /tmp/install-gateway-deps.sh \
+    && rm /tmp/install-gateway-deps.sh
+
 # Login shells (including editor terminals) must also find the Python venv.
 RUN echo 'export PATH="/opt/venv/bin:$PATH"' > /etc/profile.d/python-venv.sh
 

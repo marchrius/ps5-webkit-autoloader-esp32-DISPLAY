@@ -30,19 +30,34 @@ PICO_8M_BUILD_DIR := $(BUILD_DIR)/pico-8m
 PICO_8M_SKETCH_DIR := $(PICO_8M_BUILD_DIR)/sketch/$(PROJECT_NAME)
 PICO_8M_OUTPUT_DIR := $(PICO_8M_BUILD_DIR)/output
 
+# Gateway profiles use the official NAT-enabled SDK without changing legacy builds.
+SELECTIVE_DNS ?= 0
+GATEWAY_CORE_VERSION ?= 3.3.2
+ifeq ($(SELECTIVE_DNS),1)
+ARDUINO_DATA_DIR := $(HOME)/.arduino15-esp32-gateway
+ARDUINO_CONFIG := $(HOME)/.arduino15/arduino-cli-gateway.yaml
+CORE_VERSION := $(GATEWAY_CORE_VERSION)
+PARTITION_CSV := $(PROJECT_DIR)/partitions-gateway.csv
+else
 ARDUINO_DATA_DIR := $(HOME)/.arduino15-esp32-2
 ARDUINO_CONFIG := $(HOME)/.arduino15/arduino-cli-esp32-2.yaml
+CORE_VERSION := 2.0.11
+PARTITION_CSV := $(PROJECT_DIR)/partitions.csv
+endif
 ARDUINO_ROOT := $(ARDUINO_DATA_DIR)/packages/esp32
 ESP8266_ROOT := $(ARDUINO_DATA_DIR)/packages/esp8266
 ARDUINO_CLI := arduino-cli --config-file $(ARDUINO_CONFIG)
-CORE_VERSION := 2.0.11
 CORE_DIR := $(ARDUINO_ROOT)/hardware/esp32/$(CORE_VERSION)
 DNS_LIBRARY := $(BUILD_DIR)/dns-library
 DNS_LIBRARY_STAMP := $(DNS_LIBRARY)/.ready
 DNS_LIBRARY_ARG := --library "$(DNS_LIBRARY)"
+ifeq ($(SELECTIVE_DNS),1)
+DNS_LIBRARY_ARG :=
+DNS_LIBRARY_STAMP :=
+endif
 ESP8266_CORE_VERSION ?= 3.1.2
 ESP8266_CORE_DIR := $(ESP8266_ROOT)/hardware/esp8266/$(ESP8266_CORE_VERSION)
-ESPTOOL := $(ARDUINO_ROOT)/tools/esptool_py/4.5.1/esptool.py
+ESPTOOL := $(HOME)/.arduino15-esp32-2/packages/esp32/tools/esptool_py/4.5.1/esptool.py
 ESP8266_ESPTOOL := $(ESPTOOL)
 ESP8266_MKLITTLEFS := $(ESP8266_ROOT)/tools/mklittlefs/3.1.0-gcc10.3-e5f9fec/mklittlefs
 PARTITION_TOOL := $(CORE_DIR)/tools/gen_esp32part.py
@@ -66,6 +81,10 @@ C3_OLED ?= 0
 ifeq ($(C3_OLED),1)
 C3_OLED_FLAG := -DOLED_C3
 endif
+ifeq ($(SELECTIVE_DNS),1)
+SELECTIVE_DNS_FLAG := -DSELECTIVE_DNS
+endif
+NETWORK_SUPPORT_HEADERS := $(PROJECT_DIR)/dns-protocol.h $(PROJECT_DIR)/selective-dns.h $(PROJECT_DIR)/network-config.h $(PROJECT_DIR)/gateway-routing.h
 LCD ?= 0
 ifeq ($(LCD),1)
 LCD_FLAG := -DLCD_DONGLE
@@ -87,6 +106,11 @@ FLASH_SIZE := 4194304
 APP_PARTITION_SIZE := 1048576
 LITTLEFS_SIZE := 0x2F0000
 LITTLEFS_OFFSET := 0x110000
+ifeq ($(SELECTIVE_DNS),1)
+APP_PARTITION_SIZE := 1572864
+LITTLEFS_SIZE := 0x270000
+LITTLEFS_OFFSET := 0x190000
+endif
 PICO_8M_FLASH_SIZE := 8388608
 PICO_8M_APP_PARTITION_SIZE := 1572864
 PICO_8M_LITTLEFS_SIZE := 0x660000
@@ -121,7 +145,7 @@ ESP8266_FLASH_SIZE := 4194304
 ESP8266_LITTLEFS_SIZE := 0x2FA000
 ESP8266_LITTLEFS_OFFSET := 0x100000
 
-.PHONY: all debug debug-s2 s3-lcd c3-oled pico pico-8m s2 s3 c3 8266 littlefs datadir minimize check check-minimize check-data check-littlefs check-8266 clean FORCE
+.PHONY: all debug debug-s2 s3-lcd c3-oled c3-oled-dns s3-lcd-dns all-dns pico-dns pico-8m-dns s2-dns s3-dns c3-dns pico pico-8m s2 s3 c3 8266 littlefs datadir minimize check check-minimize check-data check-littlefs check-8266 clean FORCE
 
 all: check $(PICO_MERGED) $(S2_MERGED) $(S3_MERGED) $(C3_MERGED)
 	@echo
@@ -139,6 +163,16 @@ s3-lcd:
 
 c3-oled:
 	@$(MAKE) C3_OLED=1 BUILD_DIR="$(PROJECT_DIR)/build/oled" c3
+
+# AP+STA, selective DNS and NAT gateway profiles (all Wi-Fi ESP32 targets).
+all-dns pico-dns pico-8m-dns s2-dns s3-dns c3-dns:
+	@$(MAKE) SELECTIVE_DNS=1 USB_DEBUG=1 DEBUG_LEVEL=none BUILD_DIR="$(PROJECT_DIR)/build/gateway" $(patsubst %-dns,%,$@)
+
+s3-lcd-dns:
+	@$(MAKE) LCD=1 SELECTIVE_DNS=1 USB_DEBUG=1 DEBUG_LEVEL=none BUILD_DIR="$(PROJECT_DIR)/build/gateway-lcd" s3
+
+c3-oled-dns:
+	@$(MAKE) C3_OLED=1 SELECTIVE_DNS=1 USB_DEBUG=1 DEBUG_LEVEL=none BUILD_DIR="$(PROJECT_DIR)/build/selective-dns" c3
 
 pico: check $(PICO_MERGED)
 	@ls -lh "$(PICO_MERGED)"
@@ -234,89 +268,101 @@ $(SERVER_CERT) $(SERVER_KEY) &:
 $(SERVER_HEADER): $(SERVER_CERT) $(SERVER_KEY) $(CERT_EMBEDDER)
 	@python3 "$(CERT_EMBEDDER)" "$(SERVER_CERT)" "$(SERVER_KEY)" "$(SERVER_HEADER)"
 
+ifneq ($(SELECTIVE_DNS),1)
 $(DNS_LIBRARY_STAMP): $(CORE_DIR)/libraries/DNSServer/src/DNSServer.cpp $(CORE_DIR)/libraries/DNSServer/src/DNSServer.h $(PROJECT_DIR)/prepare-dns-library.py Makefile
 	@python3 "$(PROJECT_DIR)/prepare-dns-library.py" "$(CORE_DIR)/libraries/DNSServer" "$(DNS_LIBRARY)"
+endif
 
-$(PICO_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/partitions.csv Makefile $(DNS_LIBRARY_STAMP)
+$(PICO_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PARTITION_CSV) Makefile $(DNS_LIBRARY_STAMP) $(NETWORK_SUPPORT_HEADERS)
 	@rm -rf "$(PICO_SKETCH_DIR)"
 	mkdir -p "$(PICO_SKETCH_DIR)"
 	cp "$(PROJECT_DIR)/$(PROJECT_NAME).ino" "$(SERVER_HEADER)" "$(PICO_SKETCH_DIR)/"
-	cp "$(PROJECT_DIR)/partitions.csv" "$(PICO_SKETCH_DIR)/"
+	cp $(NETWORK_SUPPORT_HEADERS) "$(PICO_SKETCH_DIR)/"
+	cp "$(PARTITION_CSV)" "$(PICO_SKETCH_DIR)/partitions.csv"
 	$(ARDUINO_CLI) compile \
 	    $(DNS_LIBRARY_ARG) \
 	    --fqbn "$(PICO_FQBN)" \
-	    --build-property "compiler.cpp.extra_flags=-DLED_PIN=10 -DLED_ON_LEVEL=HIGH" \
+	    --build-property "compiler.cpp.extra_flags=-DLED_PIN=10 -DLED_ON_LEVEL=HIGH $(USB_DEBUG_FLAG) $(SELECTIVE_DNS_FLAG)" \
 	    --output-dir "$(PICO_BUILD_DIR)" \
 	    --build-property "build.partitions=partitions" \
 	    --build-property "build.filesystem=littlefs" \
+	    --build-property "upload.maximum_size=$(APP_PARTITION_SIZE)" \
 	    "$(PICO_SKETCH_DIR)"
 	size=$$(stat -c %s "$(PICO_APP)")
-	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: Pico application exceeds the 1 MB partition: $$size bytes" >&2; exit 1; }
+	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: Pico application exceeds its $(APP_PARTITION_SIZE)-byte partition: $$size bytes" >&2; exit 1; }
 
-$(S2_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/partitions.csv Makefile $(DNS_LIBRARY_STAMP)
+$(S2_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PARTITION_CSV) Makefile $(DNS_LIBRARY_STAMP) $(NETWORK_SUPPORT_HEADERS)
 	@rm -rf "$(S2_SKETCH_DIR)"
 	mkdir -p "$(S2_SKETCH_DIR)"
 	cp "$(PROJECT_DIR)/$(PROJECT_NAME).ino" "$(SERVER_HEADER)" "$(S2_SKETCH_DIR)/"
-	cp "$(PROJECT_DIR)/partitions.csv" "$(S2_SKETCH_DIR)/"
+	cp $(NETWORK_SUPPORT_HEADERS) "$(S2_SKETCH_DIR)/"
+	cp "$(PARTITION_CSV)" "$(S2_SKETCH_DIR)/partitions.csv"
 	$(ARDUINO_CLI) compile \
 	    $(DNS_LIBRARY_ARG) \
 	    --fqbn "$(S2_FQBN)" \
-	    --build-property "compiler.cpp.extra_flags=-DLED_PIN=17 $(USB_DEBUG_FLAG)" \
+	    --build-property "compiler.cpp.extra_flags=-DLED_PIN=17 $(USB_DEBUG_FLAG) $(SELECTIVE_DNS_FLAG)" \
 	    $(S2_TLS_DEBUG_LINK) \
 	    --output-dir "$(S2_BUILD_DIR)" \
 	    --build-property "build.partitions=partitions" \
 	    --build-property "build.filesystem=littlefs" \
+	    --build-property "upload.maximum_size=$(APP_PARTITION_SIZE)" \
 	    "$(S2_SKETCH_DIR)"
 	size=$$(stat -c %s "$(S2_APP)")
-	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: S2 application exceeds the 1 MB partition: $$size bytes" >&2; exit 1; }
+	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: S2 application exceeds its $(APP_PARTITION_SIZE)-byte partition: $$size bytes" >&2; exit 1; }
 
-$(S3_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/partitions.csv Makefile $(DNS_LIBRARY_STAMP)
+$(S3_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PARTITION_CSV) Makefile $(DNS_LIBRARY_STAMP) $(NETWORK_SUPPORT_HEADERS)
 	@rm -rf "$(S3_SKETCH_DIR)"
 	mkdir -p "$(S3_SKETCH_DIR)"
 	cp "$(PROJECT_DIR)/$(PROJECT_NAME).ino" "$(SERVER_HEADER)" "$(S3_SKETCH_DIR)/"
-	cp "$(PROJECT_DIR)/partitions.csv" "$(S3_SKETCH_DIR)/"
+	cp $(NETWORK_SUPPORT_HEADERS) "$(S3_SKETCH_DIR)/"
+	cp "$(PARTITION_CSV)" "$(S3_SKETCH_DIR)/partitions.csv"
 	$(ARDUINO_CLI) compile \
 	    $(DNS_LIBRARY_ARG) \
 	    --fqbn "$(S3_FQBN)" \
-	    --build-property "compiler.cpp.extra_flags=$(USB_DEBUG_FLAG) $(LCD_FLAG)" \
+	    --build-property "compiler.cpp.extra_flags=$(USB_DEBUG_FLAG) $(LCD_FLAG) $(SELECTIVE_DNS_FLAG)" \
 	    --output-dir "$(S3_BUILD_DIR)" \
 	    --build-property "build.partitions=partitions" \
 	    --build-property "build.filesystem=littlefs" \
+	    --build-property "upload.maximum_size=$(APP_PARTITION_SIZE)" \
 	    "$(S3_SKETCH_DIR)"
 	size=$$(stat -c %s "$(S3_APP)")
-	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: S3 application exceeds the 1 MB partition: $$size bytes" >&2; exit 1; }
+	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: S3 application exceeds its $(APP_PARTITION_SIZE)-byte partition: $$size bytes" >&2; exit 1; }
 
-$(PICO_8M_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/partitions-8m.csv Makefile $(DNS_LIBRARY_STAMP)
+$(PICO_8M_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/partitions-8m.csv Makefile $(DNS_LIBRARY_STAMP) $(NETWORK_SUPPORT_HEADERS)
 	@rm -rf "$(PICO_8M_SKETCH_DIR)" "$(PICO_8M_OUTPUT_DIR)"
 	mkdir -p "$(PICO_8M_SKETCH_DIR)" "$(PICO_8M_OUTPUT_DIR)"
 	cp "$(PROJECT_DIR)/$(PROJECT_NAME).ino" "$(SERVER_HEADER)" "$(PICO_8M_SKETCH_DIR)/"
+	cp $(NETWORK_SUPPORT_HEADERS) "$(PICO_8M_SKETCH_DIR)/"
 	cp "$(PROJECT_DIR)/partitions-8m.csv" "$(PICO_8M_SKETCH_DIR)/partitions.csv"
 	$(ARDUINO_CLI) compile \
 	    $(DNS_LIBRARY_ARG) \
 	    --fqbn "$(PICO_8M_FQBN)" \
-	    --build-property "compiler.cpp.extra_flags=-DLED_PIN=10" \
+	    --build-property "compiler.cpp.extra_flags=-DLED_PIN=10 $(USB_DEBUG_FLAG) $(SELECTIVE_DNS_FLAG)" \
 	    --output-dir "$(PICO_8M_OUTPUT_DIR)" \
 	    --build-property "build.partitions=partitions" \
 	    --build-property "build.filesystem=littlefs" \
+	    --build-property "upload.maximum_size=$(PICO_8M_APP_PARTITION_SIZE)" \
 	    "$(PICO_8M_SKETCH_DIR)"
 	size=$$(stat -c %s "$(PICO_8M_APP)")
 	test "$$size" -le "$(PICO_8M_APP_PARTITION_SIZE)" || { echo "Error: Pico 8 MB application exceeds the 1.5 MB partition: $$size bytes" >&2; exit 1; }
 
-$(C3_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/partitions.csv Makefile $(DNS_LIBRARY_STAMP)
+$(C3_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PARTITION_CSV) Makefile $(DNS_LIBRARY_STAMP) $(NETWORK_SUPPORT_HEADERS)
 	@rm -rf "$(C3_SKETCH_DIR)"
 	mkdir -p "$(C3_SKETCH_DIR)"
 	cp "$(PROJECT_DIR)/$(PROJECT_NAME).ino" "$(SERVER_HEADER)" "$(C3_SKETCH_DIR)/"
-	cp "$(PROJECT_DIR)/partitions.csv" "$(C3_SKETCH_DIR)/"
+	cp $(NETWORK_SUPPORT_HEADERS) "$(C3_SKETCH_DIR)/"
+	cp "$(PARTITION_CSV)" "$(C3_SKETCH_DIR)/partitions.csv"
 	$(ARDUINO_CLI) compile \
 	    $(DNS_LIBRARY_ARG) \
 	    --fqbn "$(C3_FQBN)" \
-	    --build-property "compiler.cpp.extra_flags=$(USB_DEBUG_FLAG) $(C3_OLED_FLAG)" \
+	    --build-property "compiler.cpp.extra_flags=$(USB_DEBUG_FLAG) $(C3_OLED_FLAG) $(SELECTIVE_DNS_FLAG)" \
 	    --output-dir "$(C3_BUILD_DIR)" \
 	    --build-property "build.partitions=partitions" \
 	    --build-property "build.filesystem=littlefs" \
+	    --build-property "upload.maximum_size=$(APP_PARTITION_SIZE)" \
 	    "$(C3_SKETCH_DIR)"
 	size=$$(stat -c %s "$(C3_APP)")
-	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: C3 application exceeds the 1 MB partition: $$size bytes" >&2; exit 1; }
+	test "$$size" -le "$(APP_PARTITION_SIZE)" || { echo "Error: C3 application exceeds its $(APP_PARTITION_SIZE)-byte partition: $$size bytes" >&2; exit 1; }
 
 $(ESP8266_APP): $(PROJECT_DIR)/esp8266-arduino.ino $(SERVER_HEADER) Makefile
 	@rm -rf "$(ESP8266_SKETCH_DIR)" "$(ESP8266_BUILD_DIR)/output"
