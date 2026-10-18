@@ -4,11 +4,41 @@ Fork of [owendswang/ps5-webkit-autoloader-esp32](https://github.com/owendswang/p
 which is itself based on [itsPLK/ps5-webkit-autoloader](https://github.com/itsPLK/ps5-webkit-autoloader).
 
 ## Changes in this fork
-- Added display support: <describe>
-- Wifi Hotspot, Ip address, Password, firmware version & Clients connected.
-- <other changes>
 
-Everything else is unchanged from the original. See Credits and License below.
+- ESP32-C3 SuperMini / 01Space 0.42-inch OLED support (SSD1306, 72×40).
+- ESP32-S3 Pocket-Dongle LCD support (ST7735, 80×160).
+- Optional AP+STA gateway profiles for ESP32/PICO, S2, S3 and C3, with IPv4 NAT
+  and selective DNS forwarding.
+- First-boot Wi-Fi setup, persistent settings, configurable hotspot name and
+  password, and a five-second BOOT reset for home Wi-Fi credentials.
+- PlayStation manual redirection and DNS blocking of PS5 system update hosts.
+- Docker and VS Code Dev Container builds for Linux, macOS and Windows.
+
+### Quick start: C3 OLED gateway
+
+```sh
+git submodule update --init --recursive
+docker compose build
+docker compose run --rm firmware make -C mklittlefs clean all
+docker compose run --rm firmware make c3-oled-dns
+```
+
+Flash `build/selective-dns/c3/esp32-arduino.c3.merged.bin` at **`0x0`** for
+first installation. A full merged flash clears saved configuration. Connect
+to the board's Wi-Fi (initially **PS5 Master Key**, password **12345678**),
+then open **http://192.168.4.1/wifi** to configure the home network.
+
+After setup, connect the PS5 to the board's Wi-Fi with automatic network
+settings, or use the board's home-network IP as both DNS servers on the PS5.
+Open **`http://<board-IP>/settings`**, log in as **admin** with the board's
+current Wi-Fi password, and change its hotspot name or password as needed.
+The C3 OLED and S3 LCD display the hotspot credentials, scrolling long values.
+Hold **BOOT for five seconds while powered on** to reset only the home Wi-Fi
+credentials; the hotspot name and password remain saved.
+
+See [gateway configuration and supported targets](#configurable-wi-fi-selective-dns-and-apsta-gateway)
+for the complete DNS policy, partition layout and update instructions. The
+standard profiles remain available for offline AP-only use.
 
 -----------------------------------------------------------------------------------------------------------
 
@@ -68,7 +98,8 @@ docker compose build
 
 The image installs GNU Make, Node.js, the asset minifiers, Arduino CLI 1.2.2,
 the pinned ESP32/ESP8266 cores, and the display libraries using
-`install-deps.sh`. The initial build needs Internet access and several GB
+`install-deps.sh`. It also installs the separate NAT-enabled ESP32 core with
+`install-gateway-deps.sh`. The initial build needs Internet access and several GB
 of disk space. The image supports Linux AMD64 and ARM64 and builds for the
 host architecture, including Apple Silicon, without requiring x86 emulation.
 
@@ -142,6 +173,31 @@ docker compose run --rm firmware make c3-oled-dns
 its existing AP-only firmware. Availability of a build target does not imply
 that every physical board and display revision has been hardware-tested.
 Gateway profiles keep USB serial diagnostics enabled on chips with native USB.
+
+Read diagnostics from a serial terminal at **115200 baud**. For example,
+install pyserial on the host and use the bundled timestamped monitor:
+
+```sh
+# macOS / Linux
+python3 -m venv .venv
+.venv/bin/python -m pip install pyserial
+.venv/bin/python serial_timestamp.py /dev/cu.usbmodem1101 115200
+```
+
+```powershell
+# Windows
+py -m venv .venv
+.venv\Scripts\python -m pip install pyserial
+.venv\Scripts\python serial_timestamp.py COM4 115200
+```
+
+Replace the port with the one assigned to your board (`/dev/ttyACM0` or
+`/dev/ttyUSB0` are common on Linux). Close the monitor before flashing.
+`[WIFI] Connected` reports the home-network IP; `[ROUTER] NAPT READY` confirms
+that IPv4 forwarding is enabled. To test Internet access through the board,
+connect a phone or computer to its hotspot and open a website; disable mobile
+data on phones during this check. For a blank C3 OLED, verify the OLED target
+and the wiring described below; the standard `c3` target does not drive it.
 
 For the C3 OLED, first installation uses
 `build/selective-dns/c3/esp32-arduino.c3.merged.bin` at offset `0x0`.
