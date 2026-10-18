@@ -62,6 +62,10 @@ S3_USB_OPTIONS := USBMode=default,CDCOnBoot=default
 C3_USB_OPTIONS := CDCOnBoot=default
 endif
 USB_DEBUG_FLAG := -DUSB_DEBUG=$(USB_DEBUG)
+C3_OLED ?= 0
+ifeq ($(C3_OLED),1)
+C3_OLED_FLAG := -DOLED_C3
+endif
 LCD ?= 0
 ifeq ($(LCD),1)
 LCD_FLAG := -DLCD_DONGLE
@@ -117,7 +121,7 @@ ESP8266_FLASH_SIZE := 4194304
 ESP8266_LITTLEFS_SIZE := 0x2FA000
 ESP8266_LITTLEFS_OFFSET := 0x100000
 
-.PHONY: all debug debug-s2 s3-lcd pico pico-8m s2 s3 c3 8266 littlefs datadir minimize check check-minimize check-data check-littlefs check-8266 clean FORCE
+.PHONY: all debug debug-s2 s3-lcd c3-oled pico pico-8m s2 s3 c3 8266 littlefs datadir minimize check check-minimize check-data check-littlefs check-8266 clean FORCE
 
 all: check $(PICO_MERGED) $(S2_MERGED) $(S3_MERGED) $(C3_MERGED)
 	@echo
@@ -132,6 +136,9 @@ debug-s2:
 
 s3-lcd:
 	@$(MAKE) LCD=1 BUILD_DIR="$(PROJECT_DIR)/build/lcd" s3
+
+c3-oled:
+	@$(MAKE) C3_OLED=1 BUILD_DIR="$(PROJECT_DIR)/build/oled" c3
 
 pico: check $(PICO_MERGED)
 	@ls -lh "$(PICO_MERGED)"
@@ -303,7 +310,7 @@ $(C3_APP): $(PROJECT_DIR)/$(PROJECT_NAME).ino $(SERVER_HEADER) $(PROJECT_DIR)/pa
 	$(ARDUINO_CLI) compile \
 	    $(DNS_LIBRARY_ARG) \
 	    --fqbn "$(C3_FQBN)" \
-	    --build-property "compiler.cpp.extra_flags=$(USB_DEBUG_FLAG)" \
+	    --build-property "compiler.cpp.extra_flags=$(USB_DEBUG_FLAG) $(C3_OLED_FLAG)" \
 	    --output-dir "$(C3_BUILD_DIR)" \
 	    --build-property "build.partitions=partitions" \
 	    --build-property "build.filesystem=littlefs" \

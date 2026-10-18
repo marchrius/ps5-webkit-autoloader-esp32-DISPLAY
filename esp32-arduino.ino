@@ -10,6 +10,51 @@
 #include "esp_idf_version.h"
 #include "server_certs.h"
 
+#ifdef OLED_C3
+#if !CONFIG_IDF_TARGET_ESP32C3
+#error "OLED_C3 requires an ESP32-C3 target"
+#endif
+#include <U8g2lib.h>
+#include <Wire.h>
+
+// 01Space / SuperMini 0.42-inch OLED: SSD1306, 72x40, I2C 0x3C.
+static U8G2_SSD1306_72X40_ER_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE, 6, 5);
+static bool oledReady = false;
+
+static void oledInit()
+{
+    oled.setI2CAddress(0x3C << 1); // U8g2 uses an 8-bit I2C address.
+    oled.setBusClock(100000);
+    oled.begin();
+    Wire.setTimeOut(50);
+    Wire.beginTransmission(0x3C);
+    oledReady = Wire.endTransmission() == 0;
+    if (!oledReady) {
+        Serial.println("OLED not found: SDA=5 SCL=6 address=0x3C");
+        return;
+    }
+    oled.setFont(u8g2_font_4x6_tr);
+    oled.setContrast(200);
+}
+
+static void oledShowInfo(const char *ssid, const String &ip,
+                         const char *pass, const char *status)
+{
+    if (!oledReady) return;
+    oled.clearBuffer();
+    oled.drawStr(0, 6, "WiFi:");
+    oled.drawStr(0, 14, ssid);
+    oled.setCursor(0, 22);
+    oled.print("IP:");
+    oled.print(ip);
+    oled.setCursor(0, 30);
+    oled.print("Key:");
+    oled.print(pass);
+    oled.drawStr(0, 38, status);
+    oled.sendBuffer();
+}
+#endif
+
 #ifdef LCD_DONGLE
 // Pocket-Dongle-S3 0.96" ST7735 80x160 LCD (software SPI).
 #include <Adafruit_GFX.h>
@@ -1033,6 +1078,11 @@ void setup()
 
     Serial.begin(115200);
 
+#ifdef OLED_C3
+    oledInit();
+    oledShowInfo(AP_SSID, "starting", AP_PASSWORD, "BOOT");
+#endif
+
 #ifdef LCD_DONGLE
     lcdInit();
 #endif
@@ -1057,7 +1107,8 @@ void setup()
     Serial.println();
     Serial.println("BOOT");
 
-    if (!LittleFS.begin(false, "/littlefs", 10, "littlefs")) {
+    bool filesystemMounted = LittleFS.begin(false, "/littlefs", 10, "littlefs");
+    if (!filesystemMounted) {
         Serial.println("LittleFS mount failed");
     }
     else {
@@ -1095,6 +1146,9 @@ void setup()
     );
 
     if (!apResult) {
+#ifdef OLED_C3
+        oledShowInfo(AP_SSID, "unavailable", AP_PASSWORD, "WiFi FAILED");
+#endif
         while (true) {
             delay(1000);
         }
@@ -1149,6 +1203,11 @@ void setup()
     Serial.println("Starting HTTPS Server");
 
     setupHttpsServer();
+
+#ifdef OLED_C3
+    oledShowInfo(AP_SSID, WiFi.softAPIP().toString(), AP_PASSWORD,
+                 filesystemMounted ? "READY" : "LittleFS ERROR");
+#endif
 
     Serial.println("READY");
 }

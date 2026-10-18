@@ -29,7 +29,7 @@ You could choose to use poops or relapse if your FW supports both methods while 
 ## Usage
 
 1. Plug the ESP32 into the PS5 and turn on the console.
-2. Connect the PS5 to the `ESP32_PORTAL` Wi-Fi network using the password `12345678`.
+2. Connect the PS5 to the `PS5 Master Key` Wi-Fi network using the password `12345678`.
 3. Open **Settings → Guide & Tips ... → Guide & Tips → User's Guide**.
 4. Wait for the installation and caching process to finish. Do not disconnect the ESP32 while it is still running.
 5. On success, Payload Manager opens automatically and a **WebKit Autoloader** shortcut appears in the **Media** section of the home screen.
@@ -103,6 +103,35 @@ with your numeric user and group IDs if needed. USB devices are not mapped;
 flash the generated `.bin` from the host with your preferred flashing tool.
 
 ## Build
+
+### ESP32-C3 SuperMini with 0.42-inch OLED
+
+The standard `make c3` firmware does not drive a display. For the common
+[01Space-compatible 0.42-inch OLED board](https://github.com/01Space/ESP32-C3-0.42LCD),
+use `make c3-oled`. This profile assumes an SSD1306-compatible 72x40 display
+at I2C address `0x3C`, with SDA on GPIO5 and SCL on GPIO6; check the board
+revision if its display stays blank. It shows Wi-Fi name, IP, password and
+startup status. The S3 LCD firmware uses a different chip and display.
+
+```sh
+docker compose build
+docker compose run --rm firmware make c3-oled
+```
+
+For native Linux, rerun `./install-deps.sh` first to install U8g2.
+The merged image is `build/oled/c3/esp32-arduino.c3.merged.bin` and must be
+flashed at offset `0x0`. To keep USB serial logging enabled, build a separate
+diagnostic image with:
+
+```sh
+docker compose run --rm firmware make USB_DEBUG=1 BUILD_DIR=/workspace/build/oled-debug C3_OLED=1 c3
+```
+
+That image is `build/oled-debug/c3/esp32-arduino.c3.merged.bin`.
+The normal OLED image disconnects native USB after boot, like the other
+release targets; a disappearing serial port alone does not indicate a crash.
+
+### Standard targets
 
 ```sh
 make

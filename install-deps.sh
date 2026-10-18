@@ -92,7 +92,7 @@ if [ "$INSTALLED_ESP8266_VERSION" != "$ESP8266_CORE_VERSION" ]; then
     "${ARDUINO_CLI[@]}" core install "esp8266:esp8266@$ESP8266_CORE_VERSION"
 fi
 
-"${ARDUINO_CLI[@]}" lib install "Adafruit GFX Library" "Adafruit ST7735 and ST7789 Library"
+"${ARDUINO_CLI[@]}" lib install "Adafruit GFX Library" "Adafruit ST7735 and ST7789 Library" "U8g2"
 
 echo
 "${ARDUINO_CLI[@]}" version
